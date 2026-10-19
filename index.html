@@ -324,7 +324,7 @@
       </nav>
       <div class="p-4 border-t border-white/10 text-xs text-emerald-100/60">
         <p class="font-arabic text-base text-gold-400 mb-4 text-right">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</p>
-        <p>By. ND Systems 2026</p>
+        <p>v1.0 · Data tersimpan lokal di browser</p>
       </div>
     </aside>
 
@@ -1850,6 +1850,9 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     settings.namaPengelola = nama;
     settings.institusi = institusi;
     settings.currentUserId = adminId;
+    // Auto-enable Supabase sync supaya data langsung ter-upload ke cloud
+    // (agar siswa/pengajar/ortu bisa login dari device lain)
+    settings.supabaseSync = true;
     // Optionally load demo data
     if (loadDemo) {
       loadDemoData();
@@ -1864,6 +1867,16 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     setView('dashboard');
     logAudit('create', 'user', adminId, nama, null, { role: 'admin', username });
     toast(`✓ Akun admin "${nama}" berhasil dibuat. Selamat datang!`);
+    // Auto-upload ke cloud (async, non-blocking)
+    if (supabaseClient) {
+      toast('☁️ Mengunggah data ke cloud...', 'info');
+      syncToSupabase().then(r => {
+        if (r.ok) toast('✓ Data ter-upload ke cloud. Siswa/pengajar/ortu sekarang bisa login dari device lain.');
+        else console.warn('Auto-upload ke cloud gagal:', r.error);
+      });
+    } else {
+      toast('⚠️ Cloud sync belum aktif. Aktifkan di Pengaturan → Sinkronisasi Cloud agar bisa multi-device.', 'info');
+    }
   }
   function showSetupError(msg) {
     const errEl = document.getElementById('setup-error');
@@ -5199,13 +5212,23 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     // Tidak ada users di localStorage → cek Supabase cloud
     if (supabaseClient) {
       showLoading('Menghubungkan ke cloud...');
-      // Cek apakah Supabase sudah dikonfigurasi (ada tabel dengan data)
+      // Timeout 10 detik — jika cloud terlalu lama, fallback ke Setup
+      let cloudTimedOut = false;
+      const cloudTimeout = setTimeout(() => {
+        cloudTimedOut = true;
+        hideLoading();
+        showSetup();
+        toast('Cloud tidak merespons. Mode offline aktif.', 'info');
+      }, 10000);
+
       testSupabaseConnection().then(async (connResult) => {
+        if (cloudTimedOut) return;
+        clearTimeout(cloudTimeout);
         if (connResult.ok) {
           // Cloud aktif → coba download data users dari cloud
           showLoading('Mengambil data dari cloud...');
           try {
-            const { data: usersData, error } = await supabaseClient.from('users').select('*').limit(1);
+            const { data: usersData, error } = await supabaseClient.from('users').select('id,nama,username,password,role,halaqah,hafiz_id,created_at').limit(100);
             if (!error && usersData && usersData.length > 0) {
               // Ada users di cloud → download semua data, lalu show Login
               showLoading('Sinkronisasi data...');
