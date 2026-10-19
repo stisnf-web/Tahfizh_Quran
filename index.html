@@ -203,6 +203,12 @@
 </head>
 <body class="text-slate-800 antialiased">
 
+  <!-- LOADING OVERLAY (saat cek cloud di startup) -->
+  <div id="loading-overlay" style="display:none;position:fixed;inset:0;z-index:300;background:linear-gradient(135deg,#022c22,#064e3b);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;">
+    <div class="w-16 h-16 rounded-full border-4 border-gold-500 border-t-transparent animate-spin"></div>
+    <p class="text-white text-sm font-medium" id="loading-text">Memuat data...</p>
+  </div>
+
   <!-- SETUP AWAL OVERLAY (first-run wizard) -->
   <div id="setup-overlay" style="display:none">
     <div class="login-card">
@@ -246,6 +252,9 @@
         </div>
         <button type="submit" class="btn btn-primary w-full justify-center">Buat Akun Admin & Mulai</button>
         <p id="setup-error" class="text-red-600 text-sm text-center hidden"></p>
+        <div class="text-center pt-2 border-t border-slate-100">
+          <button type="button" id="setup-goto-login" class="text-xs text-emerald-700 hover:text-emerald-900 font-semibold underline">Sudah punya akun? Login di sini</button>
+        </div>
       </form>
     </div>
   </div>
@@ -314,8 +323,8 @@
         <a class="nav-link" data-view="pengaturan"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> Pengaturan</a>
       </nav>
       <div class="p-4 border-t border-white/10 text-xs text-emerald-100/60">
-        <p class="font-arabic text-base text-gold-400 mb-6 text-center">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</p>
-	<p>by. ND SYSTEMS 2026</p>
+        <p class="font-arabic text-base text-gold-400 mb-4 text-right">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</p>
+        <p>By. ND Systems 2026</p>
       </div>
     </aside>
 
@@ -1785,6 +1794,7 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     document.getElementById('login-overlay').style.display = 'flex';
     // Hide main app
     document.querySelector('.flex.min-h-screen').style.display = 'none';
+    document.getElementById('loading-overlay').style.display = 'none';
     // Show setup link if no users exist yet
     const noUsers = !state.users || state.users.length === 0;
     const setupLink = document.getElementById('login-setup-link');
@@ -1803,6 +1813,7 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     document.getElementById('setup-overlay').style.display = 'flex';
     document.getElementById('login-overlay').style.display = 'none';
     document.querySelector('.flex.min-h-screen').style.display = 'none';
+    document.getElementById('loading-overlay').style.display = 'none';
   }
   function hideSetup() {
     document.getElementById('setup-overlay').style.display = 'none';
@@ -4977,6 +4988,10 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
   // Setup form (first-run wizard)
   document.getElementById('setup-form')?.addEventListener('submit', doSetupFirstAdmin);
   document.getElementById('login-goto-setup')?.addEventListener('click', showSetup);
+  document.getElementById('setup-goto-login')?.addEventListener('click', () => {
+    hideSetup();
+    showLogin();
+  });
 
   document.getElementById('lap-generate').addEventListener('click', generateLaporan);
   document.getElementById('lap-print').addEventListener('click', () => {
@@ -5149,28 +5164,77 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
   }
 
   /* ==========================================================
-     INIT
+     INIT — Cek cloud dulu sebelum tentukan Setup atau Login
      ========================================================== */
   applyTheme(settings.theme || 'light');
   applyLanguage(settings.lang || 'id');
   refreshUserBadge();
   updateAppLogo();
-  // Test Supabase connection silently (if enabled)
-  if (settings.supabaseSync && supabaseClient) {
-    testSupabaseConnection().then(r => {
-      if (!r.ok) console.warn('Supabase connection failed:', r.error);
-      updateSyncStatusUI();
-    });
+
+  // Fungsi untuk show loading overlay
+  function showLoading(text = 'Memuat data...') {
+    const el = document.getElementById('loading-overlay');
+    if (el) {
+      el.style.display = 'flex';
+      const txt = document.getElementById('loading-text');
+      if (txt) txt.textContent = text;
+    }
   }
-  // Determine initial view: setup (no users) → login (users exist but not logged in) → dashboard (logged in)
-  if (!state.users || state.users.length === 0) {
-    showSetup();
-  } else if (!getCurrentUser()) {
-    showLogin();
-  } else {
+  function hideLoading() {
+    const el = document.getElementById('loading-overlay');
+    if (el) el.style.display = 'none';
+  }
+
+  // Jika user sudah login (currentUserId masih valid), langsung ke dashboard
+  if (getCurrentUser()) {
     applyRoleVisibility();
     refreshHafizSelects();
     setView('dashboard');
+    hideLoading();
+  } else if (state.users && state.users.length > 0) {
+    // Ada users di localStorage tapi belum login → show Login
+    showLogin();
+    hideLoading();
+  } else {
+    // Tidak ada users di localStorage → cek Supabase cloud
+    if (supabaseClient) {
+      showLoading('Menghubungkan ke cloud...');
+      // Cek apakah Supabase sudah dikonfigurasi (ada tabel dengan data)
+      testSupabaseConnection().then(async (connResult) => {
+        if (connResult.ok) {
+          // Cloud aktif → coba download data users dari cloud
+          showLoading('Mengambil data dari cloud...');
+          try {
+            const { data: usersData, error } = await supabaseClient.from('users').select('*').limit(1);
+            if (!error && usersData && usersData.length > 0) {
+              // Ada users di cloud → download semua data, lalu show Login
+              showLoading('Sinkronisasi data...');
+              const syncResult = await syncFromSupabase();
+              if (syncResult.ok && state.users.length > 0) {
+                hideLoading();
+                showLogin();
+                toast('Data berhasil dimuat dari cloud. Silakan login.');
+                return;
+              }
+            }
+            // Tidak ada users di cloud → ini instalasi pertama → show Setup
+            hideLoading();
+            showSetup();
+          } catch (e) {
+            console.warn('Cloud check failed:', e);
+            hideLoading();
+            showSetup();
+          }
+        } else {
+          // Cloud tidak bisa diakses → show Setup (offline mode)
+          hideLoading();
+          showSetup();
+        }
+      });
+    } else {
+      // Supabase tidak tersedia (offline) → show Setup
+      showSetup();
+    }
   }
   </script>
 </body>
