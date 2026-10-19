@@ -1608,17 +1608,19 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     const dot = document.getElementById('sync-status-dot');
     const lastEl = document.getElementById('sync-last-text');
     if (!el || !dot) return;
-    if (!settings.supabaseSync) {
-      el.textContent = 'Dimatikan';
-      dot.className = 'w-2 h-2 rounded-full bg-slate-400';
-      unsubscribeRealtime();
-    } else if (!supabaseClient) {
+    if (!supabaseClient) {
       el.textContent = 'Library tidak tersedia';
       dot.className = 'w-2 h-2 rounded-full bg-red-500';
-    } else {
-      el.textContent = realtimeChannel ? 'Aktif (Real-time)' : 'Aktif';
+      return;
+    }
+    // Realtime selalu aktif jika Supabase tersedia (terpisah dari auto-upload)
+    if (!realtimeChannel) subscribeRealtime();
+    if (settings.supabaseSync) {
+      el.textContent = realtimeChannel ? 'Aktif (Real-time + Auto-Sync)' : 'Aktif';
       dot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
-      subscribeRealtime();
+    } else {
+      el.textContent = realtimeChannel ? 'Real-time (auto-upload mati)' : 'Terhubung';
+      dot.className = 'w-2 h-2 rounded-full bg-blue-500';
     }
     if (lastEl) {
       lastEl.textContent = settings.lastSyncAt ? new Date(settings.lastSyncAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : 'Belum pernah';
@@ -1659,24 +1661,101 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     }
   }
   let realtimeLastSync = 0;
+  let skipNextSync = false; // flag untuk skip sync setelah menerima data dari Realtime
   function handleRealtimeChange(table, payload) {
-    // Throttle: ignore events within 2 seconds of last upload (to prevent echo)
+    // Throttle: ignore events within 1 detik of last upload (to prevent echo)
     const now = Date.now();
-    if (now - realtimeLastSync < 2000) return;
-    console.log('📡 Realtime event:', table, payload.eventType, payload.new?.id || payload.old?.id);
-    // Show subtle toast (non-blocking)
-    toast('📡 Data diperbarui dari device lain...', 'info');
-    // Pull fresh data after small delay (debounce)
-    if (syncTimeout) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(async () => {
-      const r = await syncFromSupabase({ silent: true });
-      if (r.ok) console.log('✓ Auto-synced from realtime event');
-    }, 1000);
+    if (now - realtimeLastSync < 1000) return;
+    const eventType = payload.eventType; // INSERT, UPDATE, DELETE
+    const newRow = payload.new;
+    const oldRow = payload.old;
+    const recordId = newRow?.id || oldRow?.id;
+    console.log(`📡 Realtime: ${table} ${eventType} id=${recordId}`);
+
+    // Set flag untuk skip next sync (data baru saja diterima dari cloud, tidak perlu upload ulang)
+    skipNextSync = true;
+
+    // Merge perubahan ke state langsung (tanpa full sync)
+    if (table === 'setoran') {
+      if (eventType === 'DELETE') {
+        state.setoran = state.setoran.filter(s => s.id !== recordId);
+      } else if (newRow) {
+        // INSERT atau UPDATE — merge record
+        const mapped = {
+          id: newRow.id, hafizId: newRow.hafiz_id, surahNo: newRow.surah_no,
+          ayatFrom: newRow.ayat_from, ayatTo: newRow.ayat_to, juz: newRow.juz,
+          halaman: newRow.halaman, baris: newRow.baris,
+          jenis: newRow.jenis, nilai: newRow.nilai, status: newRow.status,
+          tanggal: newRow.tanggal, catatan: newRow.catatan,
+          createdAt: newRow.created_at,
+        };
+        const idx = state.setoran.findIndex(s => s.id === recordId);
+        if (idx >= 0) {
+          state.setoran[idx] = mapped; // update existing
+        } else {
+          state.setoran.push(mapped); // add new
+        }
+      }
+      saveState();
+      toast('📡 Setoran baru diterima!', 'info');
+    } else if (table === 'hafiz') {
+      if (eventType === 'DELETE') {
+        state.hafiz = state.hafiz.filter(h => h.id !== recordId);
+      } else if (newRow) {
+        const mapped = {
+          id: newRow.id, nama: newRow.nama, halaqah: newRow.halaqah, status: newRow.status,
+          tglLahir: newRow.tgl_lahir, kontak: newRow.kontak, alamat: newRow.alamat,
+          targetJuz: newRow.target_juz, level: newRow.level, kelas: newRow.kelas,
+          createdAt: newRow.created_at,
+        };
+        const idx = state.hafiz.findIndex(h => h.id === recordId);
+        if (idx >= 0) state.hafiz[idx] = mapped;
+        else state.hafiz.push(mapped);
+      }
+      saveState();
+    } else if (table === 'users') {
+      if (eventType === 'DELETE') {
+        state.users = state.users.filter(u => u.id !== recordId);
+      } else if (newRow) {
+        const mapped = {
+          id: newRow.id, nama: newRow.nama, username: newRow.username, password: newRow.password,
+          role: newRow.role, halaqah: newRow.halaqah, hafizId: newRow.hafiz_id,
+          createdAt: newRow.created_at,
+        };
+        const idx = state.users.findIndex(u => u.id === recordId);
+        if (idx >= 0) state.users[idx] = mapped;
+        else state.users.push(mapped);
+      }
+      saveState();
+    }
+
+    // Re-render view yang aktif supaya data baru langsung tampil
+    refreshActiveView();
+  }
+
+  // Refresh view yang sedang aktif setelah data berubah
+  function refreshActiveView() {
+    const activeView = document.querySelector('[data-view-content]:not(.hidden)');
+    if (!activeView) return;
+    const viewName = activeView.dataset.viewContent;
+    try {
+      if (viewName === 'dashboard') renderDashboard();
+      if (viewName === 'setoran') renderSetoran();
+      if (viewName === 'hafiz') renderHafiz();
+      if (viewName === 'capaian') renderCapaian();
+      if (viewName === 'gamifikasi') renderGamifikasi();
+      if (viewName === 'kalender') renderKalender();
+    } catch(e) { console.warn('Refresh view failed:', e); }
   }
 
   // Debounced sync — delay 800ms after last save
   function scheduleSyncToSupabase() {
     if (!settings.supabaseSync || !supabaseClient) return;
+    // Skip jika data baru saja diterima dari Realtime (cegah echo)
+    if (skipNextSync) {
+      skipNextSync = false;
+      return;
+    }
     if (syncTimeout) clearTimeout(syncTimeout);
     syncTimeout = setTimeout(() => {
       syncToSupabase().then(r => {
@@ -1935,11 +2014,19 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     logAudit('login', 'user', u.id, u.nama, null, { role: u.role });
     setTimeout(checkNotifikasi, 500); // check notif after login
     toast(`Selamat datang, ${u.nama} (${ROLE_LABELS[u.role]})`);
+    // Selalu subscribe Realtime jika Supabase tersedia (terima update dari device lain)
+    if (supabaseClient) {
+      setTimeout(() => {
+        subscribeRealtime();
+        updateSyncStatusUI();
+      }, 1000);
+    }
     return true;
   }
   function doLogout() {
     const u = getCurrentUser();
     if (u) logAudit('logout', 'user', u.id, u.nama, null, null);
+    unsubscribeRealtime();
     settings.currentUserId = null;
     saveSettings();
     showLogin();
@@ -5218,6 +5305,13 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     refreshHafizSelects();
     setView('dashboard');
     hideLoading();
+    // Auto-subscribe Realtime jika Supabase tersedia
+    if (supabaseClient) {
+      setTimeout(() => {
+        subscribeRealtime();
+        updateSyncStatusUI();
+      }, 1500);
+    }
   } else if (state.users && state.users.length > 0) {
     // Ada users di localStorage tapi belum login → show Login
     showLogin();
@@ -5251,6 +5345,8 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
                 hideLoading();
                 showLogin();
                 toast('Data berhasil dimuat dari cloud. Silakan login.');
+                // Subscribe Realtime setelah data dimuat
+                setTimeout(() => subscribeRealtime(), 1000);
                 return;
               }
               // syncFromSupabase gagal — tapi users sudah ada di cloud
