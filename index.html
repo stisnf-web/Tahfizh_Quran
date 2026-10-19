@@ -1632,6 +1632,7 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
      ========================================================== */
   function subscribeRealtime() {
     if (!supabaseClient || realtimeChannel) return;
+    realtimeGracePeriod = true; // suppress toast selama initial connection
     try {
       realtimeChannel = supabaseClient
         .channel('hifzh-changes')
@@ -1642,6 +1643,11 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
         .subscribe((status, err) => {
           if (status === 'SUBSCRIBED') {
             console.log('✓ Realtime connected');
+            // Set grace period ke false setelah 5 detik — setelah itu, event baru = genuine new
+            setTimeout(() => {
+              realtimeGracePeriod = false;
+              console.log('✓ Realtime grace period ended — toasts enabled');
+            }, 5000);
             updateSyncStatusUI();
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             console.warn('Realtime error:', err);
@@ -1658,10 +1664,12 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
         supabaseClient.removeChannel(realtimeChannel);
       } catch (e) {}
       realtimeChannel = null;
+      realtimeGracePeriod = true; // reset grace period untuk next subscribe
     }
   }
   let realtimeLastSync = 0;
   let skipNextSync = false; // flag untuk skip sync setelah menerima data dari Realtime
+  let realtimeGracePeriod = true; // suppress toast during initial connection
   function handleRealtimeChange(table, payload) {
     // Throttle: ignore events within 1 detik of last upload (to prevent echo)
     const now = Date.now();
@@ -1676,11 +1684,11 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     skipNextSync = true;
 
     // Merge perubahan ke state langsung (tanpa full sync)
+    let isGenuinelyNew = false; // track apakah ini benar-benar data baru (bukan initial load)
     if (table === 'setoran') {
       if (eventType === 'DELETE') {
         state.setoran = state.setoran.filter(s => s.id !== recordId);
       } else if (newRow) {
-        // INSERT atau UPDATE — merge record
         const mapped = {
           id: newRow.id, hafizId: newRow.hafiz_id, surahNo: newRow.surah_no,
           ayatFrom: newRow.ayat_from, ayatTo: newRow.ayat_to, juz: newRow.juz,
@@ -1694,10 +1702,14 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
           state.setoran[idx] = mapped; // update existing
         } else {
           state.setoran.push(mapped); // add new
+          isGenuinelyNew = true; // record baru = genuine new
         }
       }
       saveState();
-      toast('📡 Setoran baru diterima!', 'info');
+      // Hanya toast jika GENUINELY NEW dan bukan grace period
+      if (isGenuinelyNew && !realtimeGracePeriod) {
+        toast('📡 Setoran baru diterima!', 'info');
+      }
     } else if (table === 'hafiz') {
       if (eventType === 'DELETE') {
         state.hafiz = state.hafiz.filter(h => h.id !== recordId);
@@ -1710,9 +1722,12 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
         };
         const idx = state.hafiz.findIndex(h => h.id === recordId);
         if (idx >= 0) state.hafiz[idx] = mapped;
-        else state.hafiz.push(mapped);
+        else { state.hafiz.push(mapped); isGenuinelyNew = true; }
       }
       saveState();
+      if (isGenuinelyNew && !realtimeGracePeriod) {
+        toast(`👤 Hafizh baru: ${newRow.nama}`, 'info');
+      }
     } else if (table === 'users') {
       if (eventType === 'DELETE') {
         state.users = state.users.filter(u => u.id !== recordId);
@@ -1724,7 +1739,7 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
         };
         const idx = state.users.findIndex(u => u.id === recordId);
         if (idx >= 0) state.users[idx] = mapped;
-        else state.users.push(mapped);
+        else { state.users.push(mapped); isGenuinelyNew = true; }
       }
       saveState();
     }
