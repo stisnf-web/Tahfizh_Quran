@@ -1511,9 +1511,23 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
     if (!supabaseClient) return { ok: false, error: 'Supabase tidak terinisialisasi' };
     try {
       realtimeLastSync = Date.now();
-      // Pull settings first (to check last sync)
-      const { data: settingsRow, error: es } = await supabaseClient.from('app_settings').select('*').eq('id', 'singleton').maybeSingle();
-      if (es) throw new Error('settings fetch: ' + es.message);
+      // Pull settings — coba beberapa format ID (singleton, singleton_default, atau by institusi_id)
+      let settingsRow = null;
+      const instId = settings.institusiId || 'default';
+      // Coba by institusi_id dulu
+      const { data: sByInst, error: es1 } = await supabaseClient.from('app_settings').select('*').eq('institusi_id', instId).maybeSingle();
+      if (!es1 && sByInst) {
+        settingsRow = sByInst;
+      } else {
+        // Fallback: coba id='singleton'
+        const { data: sById, error: es2 } = await supabaseClient.from('app_settings').select('*').eq('id', 'singleton').maybeSingle();
+        if (!es2 && sById) settingsRow = sById;
+        // Fallback 2: ambil row pertama saja
+        if (!settingsRow) {
+          const { data: sFirst, error: es3 } = await supabaseClient.from('app_settings').select('*').limit(1).maybeSingle();
+          if (!es3) settingsRow = sFirst;
+        }
+      }
 
       // Pull hafiz
       const { data: hafizData, error: eh } = await supabaseClient.from('hafiz').select('*');
@@ -5239,6 +5253,19 @@ Aisyah Nur Hidayah,Al-Kahf,1,10,15,Ziyadah,88,TY,2026-10-19,Hafalan kuat</pre>
                 toast('Data berhasil dimuat dari cloud. Silakan login.');
                 return;
               }
+              // syncFromSupabase gagal — tapi users sudah ada di cloud
+              // Langsung simpan users ke state & localStorage, lalu show Login
+              console.warn('syncFromSupabase gagal, tapi users ada di cloud. Mengambil users langsung...', syncResult.error);
+              state.users = usersData.map(r => ({
+                id: r.id, nama: r.nama, username: r.username, password: r.password,
+                role: r.role, halaqah: r.halaqah, hafizId: r.hafiz_id,
+                createdAt: r.created_at,
+              }));
+              saveState();
+              hideLoading();
+              showLogin();
+              toast('Data user berhasil dimuat. Silakan login.');
+              return;
             }
             // Tidak ada users di cloud → ini instalasi pertama → show Setup
             hideLoading();
